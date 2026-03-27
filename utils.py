@@ -4,6 +4,9 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
 import gymnasium as gym
+from tqdm import tqdm
+
+
 
 #====================================================================================
 # Lr Schedulers
@@ -150,3 +153,89 @@ class FloatActionWrapper(gym.ActionWrapper):
     def action(self, action):
         # Cast the model's float output back to the environment's original type (int8)
         return action.astype(self.env.action_space.dtype)
+
+
+class ZeroRewardWrapper(gym.Wrapper):
+    """Replace zero rewards with a specified value."""
+    def __init__(self, env, zero_reward_replacement=-0.2):
+        super().__init__(env)
+        self.zero_reward_replacement = zero_reward_replacement
+    
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        if reward == 0:
+            reward = self.zero_reward_replacement
+        return obs, reward, terminated, truncated, info
+
+
+#====================================================================================
+# Evaluation
+#====================================================================================
+
+def evaluate_model(model, env, num_episodes, verbose=False):
+    """Evaluate a trained model on an environment.
+    
+    Args:
+        model_path: Path to saved model (without .zip extension)
+        env: Gym environment
+        num_episodes: Number of episodes to evaluate
+        verbose: If True, print step-by-step info about chest interactions
+    
+    Returns:
+        dict with keys: mean_reward, std_reward, min_reward, max_reward, 
+                       mean_length, std_length, success_rate
+    """
+
+
+
+    
+    episode_rewards = []
+    episode_lengths = []
+    successes = 0
+    
+    for episode in tqdm(range(num_episodes), desc="Evaluating"):
+        obs, info = env.reset()
+        episode_reward = 0
+        episode_length = 0
+        done = False
+        step = 0
+        
+        # For recurrent policies
+        lstm_states = None
+        episode_starts = np.ones((1,), dtype=bool)
+        
+        while not done:
+            past_obs = obs
+            action, _ = model.predict(obs, state=lstm_states, episode_start=episode_starts, deterministic=True)
+            obs, reward, terminated, truncated, info = env.step(action)
+            episode_reward += reward
+            episode_length += 1
+            done = terminated or truncated
+            
+            if verbose:
+                # Extract target chest from info if available
+                target_chest = action
+                success = "success" if reward > 0 else "failure"
+                print(f"  Episode {episode + 1}, Step {step}:\n  Observation : {past_obs}\n  tried chest {target_chest}: {success}")
+            
+            step += 1
+        
+        episode_rewards.append(episode_reward)
+        episode_lengths.append(episode_length)
+        
+        if episode_reward > 0:
+            successes += 1
+    
+    env.close()
+    
+    stats = {
+        'mean_reward': float(np.mean(episode_rewards)),
+        'std_reward': float(np.std(episode_rewards)),
+        'min_reward': float(np.min(episode_rewards)),
+        'max_reward': float(np.max(episode_rewards)),
+        'mean_length': float(np.mean(episode_lengths)),
+        'std_length': float(np.std(episode_lengths)),
+        'success_rate': successes / num_episodes
+    }
+    
+    return stats
