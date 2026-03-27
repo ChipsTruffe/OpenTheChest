@@ -198,7 +198,7 @@ def register_custom_envs():
         "all_noise_types": all_noise_types,
         "all_noise_attributes": all_noise_attributes,
         "verbose": False,
-        "discrete": False,
+        "discrete": True,
         "stb3": True
     }
   )
