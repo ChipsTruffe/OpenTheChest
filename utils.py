@@ -53,8 +53,12 @@ class CosineAnnealingLR:
 
 #custom callback to plot reward histroty
 class RewardHistoryCallback(BaseCallback):
-    """Callback to store episode rewards during training."""
-    def __init__(self, model=None, save_path="best_model", track_lr=False):
+    """Callback to store episode rewards during training.
+        Optional lr tracking (for debugging)
+        Optional training cancel on plateau (if patience is defined)
+    
+    """
+    def __init__(self, model=None, save_path="best_model", patience=None, track_lr=False):
         super().__init__()
         self.episode_rewards = []
         self.episode_lengths = []
@@ -66,6 +70,7 @@ class RewardHistoryCallback(BaseCallback):
         self.window_size = 20
         self.track_lr = track_lr
         self.lrs = [] if track_lr else None
+        self.patience = patience
     
     def _on_step(self) -> bool:
         # Track learning rate if enabled
@@ -89,30 +94,44 @@ class RewardHistoryCallback(BaseCallback):
         else:
             self.current_episode_reward += self.locals.get("rewards")[0]
             self.current_episode_length += 1
+
+        # Early stoppage on plateau
+        if self.patience is not None:
+            recent_window = self.episode_rewards[-self.patience:]
+            past_window = self.episode_rewards[-2 * self.patience : -self.patience]
+
+            mean_recent = np.mean(recent_window)
+            std_recent = np.std(recent_window)
+            mean_past = np.mean(past_window)
+
+            if std_recent < 0.5 and mean_recent <= mean_past:
+                print(f"Stopping: mean {mean_recent:.2f} (std {std_recent:.2f}) <= past {mean_past:.2f}")
+                self.model.save(self.save_path + "-early")
+                return False
         return True
     
     def plot(self):
-        """Plot training reward history with optional learning rate tracking."""
+        """Plot training smoothed rewards, episode length history, and optionally learning rate."""
         n_plots = 3 if self.track_lr else 2
         fig, axes = plt.subplots(1, n_plots, figsize=(14 if not self.track_lr else 18, 5))
         
         if not self.track_lr:
             axes = [axes[0], axes[1]]  # Ensure axes is always indexable consistently
         
-        # Plot raw episode rewards
-        axes[0].plot(self.episode_rewards, linewidth=0.5, alpha=0.7)
-        axes[0].set_xlabel('Episode')
-        axes[0].set_ylabel('Episode Reward')
-        axes[0].set_title('Training Episode Rewards')
-        axes[0].grid(True, alpha=0.3)
-        
         # Plot smoothed rewards (moving average)
         window = max(1, len(self.episode_rewards) // 50)
         smoothed = np.convolve(self.episode_rewards, np.ones(window)/window, mode='valid')
-        axes[1].plot(smoothed, linewidth=1.5)
-        axes[1].set_xlabel('Episode (smoothed)')
-        axes[1].set_ylabel('Moving Average Reward')
-        axes[1].set_title(f'Training Rewards (moving avg, window={window})')
+        axes[0].plot(smoothed, linewidth=1.5)
+        axes[0].set_xlabel('Episode (smoothed)')
+        axes[0].set_ylabel('Moving Average Reward')
+        axes[0].set_title(f'Training Rewards (moving avg, window={window})')
+        axes[0].grid(True, alpha=0.3)
+        
+        # Plot episode lengths
+        axes[1].plot(self.episode_lengths, linewidth=0.7, alpha=0.8)
+        axes[1].set_xlabel('Episode')
+        axes[1].set_ylabel('Episode Length')
+        axes[1].set_title('Episode Length History')
         axes[1].grid(True, alpha=0.3)
         
         # Plot learning rate if tracked
@@ -132,6 +151,7 @@ class RewardHistoryCallback(BaseCallback):
         print(f"Mean reward: {np.mean(self.episode_rewards):.2f} ± {np.std(self.episode_rewards):.2f}")
         print(f"Best reward: {np.max(self.episode_rewards):.2f}")
         print(f"Best {self.window_size}-episode avg: {self.best_avg_reward:.2f}")
+        print(f"Mean episode length: {np.mean(self.episode_lengths):.2f} ± {np.std(self.episode_lengths):.2f}")
         if self.track_lr:
             print(f"Initial LR: {self.lrs[0]:.6f}")
             print(f"Final LR: {self.lrs[-1]:.6f}")
